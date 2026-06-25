@@ -1,0 +1,16 @@
+# Python dependencies for the multi-omics analysis pipeline (PLAN_MM.md).
+# Install into the project venv:  .venv/bin/pip install -r requirements_mm.txt
+pandas
+numpy
+scipy
+scikit-learn
+statsmodels
+matplotlib
+seaborn
+adjustText
+scikit-bio
+mofapy2
+h5py
+xgboost
+pyreadstat
+openpyxl

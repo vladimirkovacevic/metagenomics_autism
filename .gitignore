@@ -1,0 +1,24 @@
+# ---- Data (never commit) ----
+data/
+results/
+
+# ---- Manuscript (kept out of the code repo) ----
+manuscript/
+
+# ---- Environments / caches ----
+.venv/
+__pycache__/
+*.pyc
+.Rhistory
+.RData
+
+# ---- OS / editor / tooling ----
+.DS_Store
+.claude/
+CLAUDE.md
+skills-lock.json
+Rplots*.pdf
+
+# ---- Planning docs (internal) ----
+PLAN.md
+PLAN_MM.md
