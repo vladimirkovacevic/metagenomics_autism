@@ -47,11 +47,14 @@ def main():
     sex = C.get_sex(cl)
     group = C.get_group(cl)
     cov = pd.concat([group, age, sex], axis=1)
+    cov["age_group"] = C.age_group(age).astype(object)   # 0-7 / 8-12 / 13+
     cov["age_flag"] = [s in AGE_FLAG_SAMPLES for s in cov.index]
     cov.to_csv(os.path.join(C.PRE, "covariates.tsv"), sep="\t")
     log.info("covariates: %d samples | age missing=%d | sex missing=%d | flagged=%s",
              len(cov), int(age.isna().sum()), int(sex.isna().sum()), AGE_FLAG_SAMPLES)
     log.info("group counts: %s", group.value_counts().to_dict())
+    log.info("age_group x group:\n%s",
+             pd.crosstab(cov["age_group"], cov["group"]).to_string())
 
     # ----- metagenomics counts (for DESeq2; integer reads from bracken_num) - #
     raw = pd.read_csv(os.path.join(C.DATA, "merged_bracken.tsv"), sep="\t", low_memory=False)

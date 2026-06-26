@@ -156,6 +156,57 @@ def clr_transform(df: pd.DataFrame, pseudo: str = "multiplicative") -> pd.DataFr
     return pd.DataFrame(clr, index=df.index, columns=df.columns)
 
 
+# Developmental age strata (PLAN_MM.md; gut microbiome matures with age).
+AGE_GROUP_BINS = [0, 8, 13, 200]
+AGE_GROUP_LABELS = ["0-7", "8-12", "13+"]
+
+
+def age_group(age) -> pd.Categorical:
+    """Bin age into 3 developmental strata: 0-7, 8-12, 13+ (right-open)."""
+    return pd.cut(pd.to_numeric(age, errors="coerce"), bins=AGE_GROUP_BINS,
+                  labels=AGE_GROUP_LABELS, right=False)
+
+
+def interaction_lm(features: pd.DataFrame, cov: pd.DataFrame):
+    """Per-feature test for a group x age-group interaction (effect modification).
+
+    Compares a full model (feature ~ group + sex + age_group + group:age_group)
+    against the reduced model (no interaction) by F-test; BH-FDR on the
+    interaction p-value. A significant q means the ASD effect differs by age band.
+    """
+    import statsmodels.api as sm
+    from statsmodels.stats.multitest import multipletests
+
+    d = build_design(cov)
+    d = d.assign(ag=age_group(cov["age"]).astype(object))
+    d = d.dropna(subset=["group01", "sex01", "ag"])
+    dum = pd.get_dummies(d["ag"], prefix="ag", drop_first=True).astype(float)
+    base = pd.concat([d[["group01", "sex01"]], dum], axis=1)
+    inter = pd.DataFrame({f"gx_{c}": d["group01"].values * dum[c].values
+                          for c in dum.columns}, index=d.index)
+    Xr = sm.add_constant(base)
+    Xf = sm.add_constant(pd.concat([base, inter], axis=1))
+
+    rows = {}
+    for feat in features.columns:
+        y = pd.to_numeric(features.loc[d.index, feat], errors="coerce")
+        ok = y.notna()
+        if ok.sum() < 20 or y[ok].nunique() < 3:
+            continue
+        try:
+            rf = sm.OLS(y[ok], Xf.loc[ok]).fit()
+            rr = sm.OLS(y[ok], Xr.loc[ok]).fit()
+            fval, pval, _ = rf.compare_f_test(rr)
+        except Exception:
+            continue
+        rows[feat] = {"F_interaction": fval, "p_interaction": pval}
+    out = pd.DataFrame(rows).T
+    if not out.empty:
+        out["q_interaction"] = multipletests(out["p_interaction"], method="fdr_bh")[1]
+        out = out.sort_values("q_interaction")
+    return out
+
+
 def build_design(cov: pd.DataFrame) -> pd.DataFrame:
     """Numeric design matrix from covariates: group01 (autism=1), age, sex01 (M=1)."""
     d = pd.DataFrame(index=cov.index)

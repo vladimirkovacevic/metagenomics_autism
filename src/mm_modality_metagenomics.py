@@ -12,6 +12,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import seaborn as sns
+from scipy.stats import mannwhitneyu
 from scipy.spatial.distance import pdist, squareform
 from skbio import DistanceMatrix
 from skbio.stats.distance import permanova
@@ -122,6 +124,101 @@ def main():
     ax.set_xlabel("CLR coefficient (autism − control)")
     ax.set_title("Top 20 taxa by effect size (red=↑autism, blue=↑control)")
     fig.tight_layout(); fig.savefig(os.path.join(OUT, "differential_top_taxa.png"), dpi=130); plt.close(fig)
+
+    # ===================== AGE-STRATIFIED ANALYSES ===================== #
+    # Gut microbiome matures with age; analyse the 3 developmental strata (0-7,
+    # 8-12, 13+) in addition to the age-adjusted whole-cohort analyses above.
+    AGES = C.AGE_GROUP_LABELS
+    cov_ag = cov.assign(age_group=C.age_group(cov["age"]).astype(object))
+    alpha_ag = alpha.join(cov_ag[["group", "age_group"]])
+
+    # ---- alpha diversity per age group ---- #
+    inter_alpha = C.interaction_lm(alpha, cov)
+    arows = []
+    fig, axes = plt.subplots(1, 3, figsize=(13, 4.2))
+    for ax, metric in zip(axes, alpha.columns):
+        sns.boxplot(data=alpha_ag, x="age_group", y=metric, hue="group",
+                    order=AGES, hue_order=["autism", "control"],
+                    palette=PALETTE, ax=ax, fliersize=2, linewidth=0.8)
+        pint = inter_alpha.loc[metric, "p_interaction"] if metric in inter_alpha.index else float("nan")
+        ax.set_title(f"{metric}  (group×age p={pint:.2f})", fontsize=9)
+        ax.set_xlabel("age group")
+        if ax is not axes[0] and ax.get_legend():
+            ax.get_legend().remove()
+        for agl in AGES:
+            a = alpha_ag.loc[(alpha_ag.age_group == agl) & (alpha_ag.group == "autism"), metric].dropna()
+            k = alpha_ag.loc[(alpha_ag.age_group == agl) & (alpha_ag.group == "control"), metric].dropna()
+            p = mannwhitneyu(a, k).pvalue if len(a) >= 5 and len(k) >= 5 else np.nan
+            arows.append({"metric": metric, "age_group": agl, "n_autism": len(a),
+                          "n_control": len(k), "p_within": p})
+    fig.suptitle("Alpha diversity by age group and diagnosis")
+    fig.tight_layout(); fig.savefig(os.path.join(OUT, "alpha_by_agegroup.png"), dpi=140); plt.close(fig)
+    pd.DataFrame(arows).to_csv(os.path.join(OUT, "alpha_by_agegroup.csv"), index=False)
+    log.info("alpha per age group: within-stratum + interaction computed")
+
+    # ---- beta diversity per age group (PERMANOVA within each stratum) ---- #
+    brows = []
+    fig, axes = plt.subplots(1, 3, figsize=(13, 4.4))
+    for ax, agl in zip(axes, AGES):
+        idx = list(cov_ag.index[cov_ag.age_group == agl])
+        gsub = group.loc[idx]
+        if gsub.nunique() < 2 or len(idx) < 8:
+            ax.axis("off"); continue
+        dm = DistanceMatrix(squareform(pdist(mg_clr.loc[idx].values)), ids=idx)
+        pe = permanova(dm, grouping=list(gsub), permutations=999)
+        dmb = DistanceMatrix(squareform(pdist(mg_filt.loc[idx].values, metric="braycurtis")), ids=idx)
+        peb = permanova(dmb, grouping=list(gsub), permutations=999)
+        brows.append({"age_group": agl, "n": len(idx),
+                      "Aitchison_F": pe["test statistic"], "Aitchison_p": pe["p-value"],
+                      "BrayCurtis_F": peb["test statistic"], "BrayCurtis_p": peb["p-value"]})
+        ordi = pcoa(dm, number_of_dimensions=2)
+        coords = ordi.samples.iloc[:, :2].values
+        expl = ordi.proportion_explained.iloc[:2].values * 100
+        for grp in ["autism", "control"]:
+            m = gsub.values == grp
+            ax.scatter(coords[m, 0], coords[m, 1], s=24, alpha=0.75, c=PALETTE[grp], label=grp)
+        ax.set_xlabel(f"PC1 ({expl[0]:.0f}%)"); ax.set_ylabel(f"PC2 ({expl[1]:.0f}%)")
+        ax.set_title(f"{agl} (n={len(idx)}; Aitchison PERMANOVA p={pe['p-value']:.3f})", fontsize=9)
+        if ax is axes[0]:
+            ax.legend(fontsize=8)
+    fig.suptitle("Beta diversity (Aitchison PCoA) within each age group")
+    fig.tight_layout(); fig.savefig(os.path.join(OUT, "beta_by_agegroup.png"), dpi=140); plt.close(fig)
+    pd.DataFrame(brows).to_csv(os.path.join(OUT, "permanova_by_agegroup.csv"), index=False)
+    log.info("PERMANOVA within age groups: %s",
+             {r["age_group"]: round(r["Aitchison_p"], 3) for r in brows})
+
+    # ---- stratified differential abundance + group×age interaction ---- #
+    strat = {agl: C.differential_lm(mg_clr.loc[cov_ag.index[cov_ag.age_group == agl]],
+                                    cov.loc[cov_ag.index[cov_ag.age_group == agl]])
+             for agl in AGES}
+    inter = C.interaction_lm(mg_clr, cov)
+    inter.to_csv(os.path.join(OUT, "differential_interaction.csv"))
+    n_int = int((inter["q_interaction"] < 0.05).sum()) if not inter.empty else 0
+    log.info("differential taxa: group×age interaction significant (q<0.05) in %d taxa", n_int)
+
+    focus = list(da[da["qval"] < 0.05].index)
+    for res in strat.values():
+        if not res.empty:
+            focus += list(res[res["qval"] < 0.05].index)
+    focus = list(dict.fromkeys(focus))[:30]
+    if focus:
+        coef_tab = pd.DataFrame({"overall": da["coef_group"].reindex(focus)}, index=focus)
+        sig_tab = pd.DataFrame({"overall": (da["qval"].reindex(focus) < 0.05)}, index=focus)
+        for agl, res in strat.items():
+            coef_tab[agl] = res["coef_group"].reindex(focus) if not res.empty else np.nan
+            sig_tab[agl] = (res["qval"].reindex(focus) < 0.05) if not res.empty else False
+        coef_tab.to_csv(os.path.join(OUT, "differential_stratified.csv"))
+        fig, ax = plt.subplots(figsize=(7, max(4, 0.32 * len(focus))))
+        im = ax.imshow(coef_tab.values.astype(float), cmap="RdBu_r", vmin=-1.5, vmax=1.5, aspect="auto")
+        ax.set_xticks(range(coef_tab.shape[1])); ax.set_xticklabels(coef_tab.columns)
+        ax.set_yticks(range(len(focus))); ax.set_yticklabels([t[:38] for t in focus], fontsize=6)
+        for (i, j), v in np.ndenumerate(coef_tab.values.astype(float)):
+            if bool(sig_tab.values[i, j]):
+                ax.text(j, i, "*", ha="center", va="center", color="k", fontsize=8)
+        ax.set_title("Differential taxa: CLR coef (autism−control) by age group\n"
+                     "(* q<0.05; columns: overall + 3 strata)", fontsize=9)
+        fig.colorbar(im, ax=ax, shrink=0.5, label="CLR coef")
+        fig.tight_layout(); fig.savefig(os.path.join(OUT, "differential_stratified.png"), dpi=150); plt.close(fig)
 
     log.info("metagenomics analysis complete -> %s", os.path.relpath(OUT, C.ROOT))
 

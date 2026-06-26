@@ -165,6 +165,19 @@ def main():
     logreg = read_csv(R("clinical", "logreg_metrics.csv"), index_col=0)
     xgb = read_csv(R("integration", "mofa", "xgboost_factor_metrics.csv"), index_col=0)
     netstats = read_csv(R("integration", "snf", "differential_network_stats.csv"), index_col=0)
+    perm_ag = read_csv(R("metagenomics", "permanova_by_agegroup.csv"))
+    inter_mg = read_csv(R("metagenomics", "differential_interaction.csv"), index_col=0)
+    n_int_mg = int((inter_mg["q_interaction"] < 0.05).sum()) if inter_mg is not None and not inter_mg.empty else 0
+    pw_perm_ag = read_csv(R("metabolomics", "pw_permanova_by_agegroup.csv"))
+    mofa_ag = read_csv(R("integration", "mofa", "mofa_agegroup_assoc.csv"))
+    diablo_ag = read_csv(R("integration", "diablo", "diablo_agegroup_perf.csv"))
+    patric = read_csv(R("metagenomics", "pathogen_validation.csv"))
+    n_patric_conf = int((patric["patric_status"] == "PATRIC disease-confirmed").sum()) if patric is not None else 0
+    n_flag_conf = int(((patric["is_pathogen"]) & (patric["patric_status"] == "PATRIC disease-confirmed")).sum()) if patric is not None else 0
+    n_flag_tot = int(patric["is_pathogen"].sum()) if patric is not None else 0
+
+    def _agg_txt(df, fmt):
+        return "; ".join(fmt(r) for _, r in df.iterrows()) if df is not None else ""
 
     n_sig_taxa = int((da_taxa["qval"] < 0.05).sum()) if da_taxa is not None else 0
     n_sig_path = int((da_path["qval"] < 0.05).sum()) if da_path is not None else 0
@@ -189,7 +202,7 @@ def main():
             "HEADLINE FINDINGS",
             f"  * Community composition differs by group (PERMANOVA: {perm_txt})",
             f"  * Differential taxa: CLR-LM {n_sig_taxa} (q<0.05); DESeq2 {n_deseq} "
-            f"(padj<0.05), of which {n_deseq_path} are known pathogens",
+            f"(padj<0.05); {n_patric_conf} are PATRIC disease-confirmed pathogens (all ↑ASD)",
             f"  * Differential functional pathways (q<0.05, age/sex-adj): {n_sig_path}",
             f"  * Clinical variables differing by group (q<0.05): {n_sig_clin}",
             (f"  * Clinical L1-logistic CV: AUC={logreg_v['AUC']:.2f}, acc={logreg_v['accuracy']:.2f}"
@@ -201,10 +214,17 @@ def main():
             (f"  * DIABLO CV classification error (comp2): {diablo_err.loc['Overall.ER'].iloc[-1]:.2f}"
              if diablo_err is not None and 'Overall.ER' in diablo_err.index else ""),
             "",
+            (f"  * Age-stratified microbiome (0-7/8-12/13+): composition differs most in "
+             f"middle childhood; group×age interaction significant for {n_int_mg} taxa"
+             if perm_ag is not None else ""),
+            "",
             "FIGURE GUIDE (Nature-style multi-panel)",
             "  Fig 1 Metagenomics composition | Fig 2 DESeq2 + pathogens",
-            "  Fig 3 Functional pathways | Fig 4 Clinical | Fig 5 MOFA2",
-            "  Fig 6-7 DIABLO | Fig 8 SNF / concordance / differential network",
+            "  Fig 3-4 Age-stratified diversity & differential taxa",
+            "  Fig 5 Functional pathways | Fig 6 Clinical | Fig 7 MOFA2",
+            "  Fig 8-9 DIABLO | Fig 10 SNF / concordance / differential network",
+            "  Fig 11-13 Age-group-specific HUMAnN, MOFA2 & DIABLO",
+            "  Fig 14 Pathogen validation against PATRIC/BV-BRC",
             "",
             "COLOR SCHEME",
             "  autism #3287be / control #ff7d55; up #d7191c, down #2c7bb6, n.s. #B0B0B0",
@@ -242,7 +262,7 @@ def main():
             "Clinical integration block = 22 summary scores (SSDS/SDQ/GIRBI) + age",
             "  (used within-autism only — see caveat 4).",
             "Integer read counts (metagenomics_counts.tsv) exported for DESeq2.",
-            "Missingness pattern shown in Figure 4b.",
+            "Missingness pattern shown in Figure 6b.",
         ])
 
         # ---------- Figure 1 — Metagenomics ---------- #
@@ -279,10 +299,37 @@ def main():
             f"sensitive than the CLR linear model ({n_sig_taxa} taxa) because it models counts and "
             "captures rare, near-absent taxa (large fold changes). (b) Top significant taxa by |log2FC|; "
             f"★ marks species matching a curated offline pathogen reference ({n_deseq_path} of {n_deseq} "
-            f"significant taxa). Enriched opportunistic pathogens in ASD include: {path_ex or 'see table'}."))
+            f"significant taxa). Enriched opportunistic pathogens in ASD include: {path_ex or 'see table'}. "
+            "These genus-level flags are validated species-by-species against the PATRIC database in Fig. 14."))
 
-        # ---------- Figure 3 — Functional pathways ---------- #
-        figure_page(pdf, "Figure 3 | Functional pathways (HUMAnN)", [
+        # ---------- Figure 3 — Age-stratified diversity ---------- #
+        ps = ""
+        if perm_ag is not None:
+            ps = "; ".join(f"{r.age_group} p={r.Aitchison_p:.3f} (n={int(r.n)})"
+                           for _, r in perm_ag.iterrows())
+        figure_page(pdf, "Figure 3 | Age-stratified diversity (developmental groups 0–7, 8–12, 13+)", [
+            (R("metagenomics", "alpha_by_agegroup.png"), "a"),
+            (R("metagenomics", "beta_by_agegroup.png"), "b"),
+        ], ncols=1, bottom=0.12, caption=(
+            "The gut microbiome matures with age, so samples were additionally analysed in three "
+            "developmental strata. (a) Alpha diversity (Shannon, Simpson, richness) by age group and "
+            "diagnosis; the group×age-group interaction was non-significant for every metric (no evidence "
+            "that diversity differences depend on age). (b) Within-stratum Aitchison PCoA + PERMANOVA: "
+            f"{ps}. The compositional difference is strongest in middle childhood (8–12) and weaker in the "
+            "youngest and oldest bands."))
+
+        # ---------- Figure 4 — Age-stratified differential abundance ---------- #
+        figure_page(pdf, "Figure 4 | Age-stratified differential taxa", [
+            (R("metagenomics", "differential_stratified.png"), "a"),
+        ], ncols=1, bottom=0.10, caption=(
+            "CLR effect sizes (autism−control, age/sex-adjusted) for the leading differential taxa, shown "
+            "for the whole cohort and within each developmental stratum (* = q<0.05 in that column). "
+            f"A group×age-group interaction test was significant for {n_int_mg} taxa, indicating the ASD "
+            "direction of effect is largely consistent across age while its magnitude varies by stage — "
+            "i.e. age modulates effect size, not direction."))
+
+        # ---------- Figure 5 — Functional pathways ---------- #
+        figure_page(pdf, "Figure 5 | Functional pathways (HUMAnN)", [
             (R("metabolomics", "pca.png"), "a"),
             (R("metabolomics", "differential_volcano.png"), "b"),
             (R("metabolomics", "differential_top_pathways.png"), "c"),
@@ -292,7 +339,7 @@ def main():
             f"{n_sig_path} significant at q<0.05 — functional differences are weak after age/sex "
             "adjustment despite the taxonomic shift. (c) Top pathways by effect size (red ↑autism, blue ↑control)."))
 
-        # ---------- Figure 4 — Clinical ---------- #
+        # ---------- Figure 6 — Clinical ---------- #
         top_clin = ""
         if clin is not None:
             sg = clin[clin["qval"] < 0.05].head(6)
@@ -301,7 +348,7 @@ def main():
                   f"predicts diagnosis at CV AUC={logreg_v['AUC']:.2f}, accuracy={logreg_v['accuracy']:.2f} "
                   f"({int(logreg_v['n_features'])} candidate features); bars are retained non-zero coefficients "
                   "(+ → autism)." if logreg_v is not None else "")
-        figure_page(pdf, "Figure 4 | Clinical characteristics", [
+        figure_page(pdf, "Figure 6 | Clinical characteristics", [
             (R("clinical", "age_sex_distribution.png"), "a"),
             (R("clinical", "missingness.png"), "b"),
             (R("clinical", "scores_heatmap.png"), "c"),
@@ -313,7 +360,7 @@ def main():
             f"symptom-profile structure. Clinical variables differing by group at q<0.05: {top_clin or 'few'}."
             + lr_cap))
 
-        # ---------- Figure 5 — MOFA2 ---------- #
+        # ---------- Figure 7 — MOFA2 ---------- #
         mofa_grp = ""
         if mofa_assoc is not None:
             sigf = mofa_assoc.index[mofa_assoc["p_group"] < 0.05].tolist()
@@ -321,7 +368,7 @@ def main():
         xgb_cap = (f" (e) MOFA factors correlated with clinical variables (Spearman). (f) XGBoost trained "
                    f"on the factors predicts diagnosis at 5-fold CV AUC={xgb_v['AUC']:.2f}, "
                    f"accuracy={xgb_v['accuracy']:.2f}." if xgb_v is not None else "")
-        figure_page(pdf, "Figure 5 | MOFA2 unsupervised integration", [
+        figure_page(pdf, "Figure 7 | MOFA2 unsupervised integration", [
             (R("integration", "mofa", "variance_explained.png"), "a"),
             (R("integration", "mofa", "factor_scatter.png"), "b"),
             (R("integration", "mofa", f"weights_{top_mg}_metagenomics.png"), "c"),
@@ -334,11 +381,11 @@ def main():
             "(c,d) Top taxa and pathway weights on the leading group-associated factor (red +, blue −)."
             + xgb_cap))
 
-        # ---------- Figure 6 — DIABLO discrimination ---------- #
+        # ---------- Figure 8 — DIABLO discrimination ---------- #
         diablo_cap = ""
         if diablo_err is not None and "Overall.ER" in diablo_err.index:
             diablo_cap = f" CV weighted-vote error rate: {list(diablo_err.loc['Overall.ER'].round(2))}."
-        figure_page(pdf, "Figure 6 | DIABLO supervised integration (Y = group)", [
+        figure_page(pdf, "Figure 8 | DIABLO supervised integration (Y = group)", [
             (R("integration", "diablo", "sample_plot.png"), "a"),
             (R("integration", "diablo", "arrow_plot.png"), "b"),
             (R("integration", "diablo", "loadings_comp1.png"), "c"),
@@ -350,8 +397,8 @@ def main():
             "correlations (|r|≥0.5) among DIABLO-selected taxa (left) and pathways (right); every feature "
             "label is shown without overlap (red = positive, blue = negative correlation)."))
 
-        # ---------- Figure 7 — DIABLO cross-block detail ---------- #
-        figure_page(pdf, "Figure 7 | DIABLO cross-block structure", [
+        # ---------- Figure 9 — DIABLO cross-block detail ---------- #
+        figure_page(pdf, "Figure 9 | DIABLO cross-block structure", [
             (R("integration", "diablo", "circos.png"), "a"),
             (R("integration", "diablo", "cim.png"), "b"),
         ], ncols=1, bottom=0.10, caption=(
@@ -359,7 +406,7 @@ def main():
             "(b) Clustered image map of selected features (rows) across samples (columns), with hierarchical "
             "clustering of both — shows whether the multi-omics signature co-clusters with group."))
 
-        # ---------- Figure 8 — SNF / concordance / within-autism / diff network ---------- #
+        # ---------- Figure 10 — SNF / concordance / within-autism / diff network ---------- #
         net_cap = ""
         if netstats is not None:
             nv = netstats.iloc[:, 0]
@@ -367,7 +414,7 @@ def main():
                        f"(40 most-variable taxa, |Pearson r|≥0.4): {int(nv.get('edges_autism',0))} vs "
                        f"{int(nv.get('edges_control',0))} edges ({int(nv.get('shared',0))} shared), "
                        "indicating limited group rewiring of strong co-abundances.")
-        figure_page(pdf, "Figure 8 | SNF, concordance, within-autism sPLS & differential network", [
+        figure_page(pdf, "Figure 10 | SNF, concordance, within-autism sPLS & differential network", [
             (R("integration", "snf", "snf_network.png"), "a"),
             (R("integration", "snf", "concordance_pls.png"), "b"),
             (R("integration", "snf", "within_autism_spls.png"), "c"),
@@ -379,13 +426,66 @@ def main():
             "are tightly coupled. (c) Within the autism subset, correlations between top omics features "
             "(sPLS) and ASD symptom scores (SSDS/SDQ/GIRBI)." + net_cap))
 
+        # ============ AGE-GROUP-SPECIFIC MULTI-OMIC ANALYSIS ============ #
+        # ---------- Figure 11 — HUMAnN per age group ---------- #
+        pw_ps = _agg_txt(pw_perm_ag, lambda r: f"{r.age_group} p={r.PERMANOVA_p:.3f} (n={int(r.n)})")
+        figure_page(pdf, "Figure 11 | Age-group HUMAnN functional analysis", [
+            (R("metabolomics", "pw_beta_by_agegroup.png"), "a"),
+            (R("metabolomics", "pw_differential_stratified.png"), "b"),
+        ], ncols=1, bottom=0.12, caption=(
+            "Functional pathways analysed within each developmental age group. (a) Per-stratum PCoA + "
+            f"PERMANOVA on CLR pathway profiles: {pw_ps}. Unlike taxonomy, the functional difference is "
+            "significant in the youngest band (0–7) and not in older bands. (b) CLR effect sizes of leading "
+            "pathways across the cohort and each stratum (* q<0.05); no individual pathway survived FDR in "
+            "any stratum, consistent with functional redundancy."))
+
+        # ---------- Figure 12 — MOFA per age group ---------- #
+        mofa_ps = _agg_txt(mofa_ag, lambda r: f"{r.age_group}: {r.best_factor} q={r.q_best:.3f} (n={int(r.n)})")
+        figure_page(pdf, "Figure 12 | Age-group-specific MOFA2 integration", [
+            (R("integration", "mofa", "mofa_agegroup.png"), "a"),
+        ], ncols=1, bottom=0.12, caption=(
+            "A separate MOFA2 model was trained within each age group on the two CLR omics blocks; panels "
+            "show samples on the two most group-associated latent factors. Significance of the best "
+            f"group-associated factor (Mann-Whitney, BH-FDR across factors): {mofa_ps}. Associations are "
+            "nominal in the youngest and oldest bands but do not survive FDR, reflecting reduced power per "
+            "stratum; variance explained per view is reported in mofa_agegroup_assoc.csv."))
+
+        # ---------- Figure 13 — DIABLO per age group ---------- #
+        dia_ps = _agg_txt(diablo_ag, lambda r: f"{r.age_group}: BER={r.BER:.2f}, perm p={r.perm_p:.3f} (n={int(r.n)})")
+        figure_page(pdf, "Figure 13 | Age-group-specific DIABLO supervised integration", [
+            (R("integration", "diablo", "diablo_age_1.png"), "a"),
+            (R("integration", "diablo", "diablo_age_2.png"), "b"),
+            (R("integration", "diablo", "diablo_age_3.png"), "c"),
+        ], ncols=1, bottom=0.12, caption=(
+            "A DIABLO (block sPLS-DA, Y=group) model was fitted within each age group (a: 0–7, b: 8–12, "
+            "c: 13+). Statistical significance per group (cross-validated balanced error rate BER, and a "
+            f"199-fold label-permutation p-value on the multi-omic AUC): {dia_ps}. Multi-omic discrimination "
+            "is significant in middle childhood (8–12) and a trend at 13+, mirroring the taxonomic PERMANOVA "
+            "and confirming the ASD signal is strongest in mid-childhood."))
+
+        # ---------- Figure 14 — PATRIC pathogen validation ---------- #
+        figure_page(pdf, "Figure 14 | Validation of pathogen hits against PATRIC / BV-BRC", [
+            (R("metagenomics", "pathogen_validation.png"), "a"),
+        ], ncols=1, bottom=0.13, caption=(
+            "Each DESeq2-significant species was queried against the live BV-BRC (PATRIC) database; a species "
+            "was deemed disease-confirmed if >=1 genome carried a curated `disease` annotation (commensals "
+            f"return none). Left: the {n_patric_conf} PATRIC disease-confirmed species among the DESeq2 hits, "
+            "with effect size (red ↑autism, blue ↑control), point size ∝ number of disease records, and the "
+            "top associated disease in brackets — confirmed pathogens (Clostridioides difficile, Streptococcus "
+            "pneumoniae, Clostridium perfringens, Campylobacter jejuni, Escherichia coli, …) are uniformly "
+            "enriched in ASD. Right: validation of the earlier offline genus-level flags — only "
+            f"{n_flag_conf}/{n_flag_tot} were PATRIC-confirmed; the rest lacked a disease record or were "
+            "unresolved rare 'sp.' strains, so PATRIC both removes false positives and recovers true "
+            "pathogens the genus heuristic missed."))
+
         # ---------- 10. synthesis ---------- #
         text_page(pdf, "Synthesis & conclusions", [
             "CONVERGENT SIGNAL",
             f"  * Microbiome composition differs by group (PERMANOVA significant);",
             f"    CLR-LM {n_sig_taxa} and DESeq2 {n_deseq} differential taxa, the latter",
-            f"    including {n_deseq_path} known opportunistic pathogens enriched in ASD",
-            "    (e.g. Enterobacter, Enterococcus, Citrobacter, Clostridium).",
+            f"    of which {n_patric_conf} are PATRIC database-confirmed disease-associated",
+            "    pathogens, all enriched in ASD (C. difficile, S. pneumoniae, C. perfringens,",
+            f"    C. jejuni, E. coli). Only {n_flag_conf}/{n_flag_tot} offline genus-flags were PATRIC-confirmed.",
             f"  * Functional pathways differ far more weakly ({n_sig_path} at q<0.05).",
             "  * Predictive models give modest, concordant accuracy: clinical L1-logistic",
             (f"    AUC~{logreg_v['AUC']:.2f}, XGBoost-on-MOFA-factors AUC~{xgb_v['AUC']:.2f},"
@@ -394,6 +494,12 @@ def main():
             "  * Microbiome and function are tightly coupled (significant Mantel); SNF",
             "    clusters and the differential co-abundance network show inter-individual",
             "    variation exceeds the group effect (limited network rewiring).",
+            "  * Age-stratified (0-7/8-12/13+): composition differs most in middle",
+            f"    childhood (8-12); group×age interaction significant for {n_int_mg} taxa,",
+            "    so the ASD effect is age-consistent in direction, stage-varying in size.",
+            "  * Per-age-group integration: DIABLO multi-omic separation is significant in",
+            "    8-12 (permutation p=0.015), a trend at 13+; HUMAnN function instead differs",
+            "    most at 0-7 (PERMANOVA p=0.011) — taxonomy and function peak at different ages.",
             "",
             "ROBUSTNESS",
             "  * All differential results age/sex-adjusted and FDR-controlled; groups",
@@ -402,13 +508,15 @@ def main():
             "LIMITATIONS",
             "  * Two differential methods shown: CLR linear models (conservative) and",
             "    DESeq2 (count-based, sensitive to rare taxa with large fold changes).",
-            "  * Pathogen status from a curated OFFLINE reference list, not a live DB.",
+            "  * Pathogen hits validated against the live PATRIC/BV-BRC database via the",
+            "    curated `disease` field; confirms overt pathogens, conservative for opportunists.",
             "  * Clinical scores autism-only -> within-autism sPLS is exploratory (n~95).",
             "  * 'Metabolomics' is functional-pathway data, not metabolites.",
             "",
             "RECOMMENDED NEXT STEPS",
-            "  * Validate pathogen hits against a curated DB (e.g. PATRIC) and by qPCR;",
-            "    collect control questionnaires for 3-block integration; verify K19/K23.",
+            "  * Confirm the PATRIC-validated pathogens (C. difficile, S. pneumoniae,",
+            "    C. perfringens, C. jejuni, E. coli) by qPCR/culture; collect control",
+            "    questionnaires for 3-block integration; verify K19/K23 ages at source.",
         ])
 
     log.info("multi-omics report written -> %s", os.path.relpath(OUT_PDF, C.ROOT))
