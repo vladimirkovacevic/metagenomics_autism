@@ -55,7 +55,7 @@ ROOT = os.path.dirname(HERE)
 DATA = os.path.join(ROOT, "data")
 
 BRACKEN_TSV = os.path.join(DATA, "merged_bracken.tsv")
-CLINICAL_SAV = os.path.join(DATA, "clinical.sav")
+CLINICAL_SAV = os.path.join(DATA, "clinical_reduced.sav")
 MAPPING_XLSX = os.path.join(DATA, "Sifrarnik_kakice.xlsx")
 METAB_DIR = os.path.join(DATA, "metabolomics_raw_data")
 

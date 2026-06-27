@@ -267,8 +267,14 @@ def classify_clinical_columns(clinical: pd.DataFrame):
     Returns (continuous_cols, categorical_cols, dropped_reasons).
     """
     cols = list(clinical.columns)
-    excluded_positions = set(range(SSDS_ITEMS[0] - 1, SSDS_ITEMS[1])) | \
-        set(range(SDQ_ITEMS[0] - 1, SDQ_ITEMS[1]))
+    # Raw SSDS/SDQ item exclusion is positional and tuned to the FULL 470-col
+    # SPSS layout. The reduced/curated export already omits raw items, so only
+    # apply the positional exclusion when the full layout is present.
+    if len(cols) >= 454:
+        excluded_positions = set(range(SSDS_ITEMS[0] - 1, SSDS_ITEMS[1])) | \
+            set(range(SDQ_ITEMS[0] - 1, SDQ_ITEMS[1]))
+    else:
+        excluded_positions = set()
 
     continuous, categorical, dropped = [], [], {}
     for i, c in enumerate(cols):
